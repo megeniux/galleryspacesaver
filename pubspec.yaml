@@ -1,0 +1,53 @@
+name: rigel_space_saver
+description: "Rigel Space Saver — free, offline, privacy-first media compression. By Tech Rigel."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # State management
+  flutter_riverpod: ^2.6.1
+
+  # Media discovery and local cache
+  drift: ^2.28.1
+  drift_flutter: ^0.2.5
+  permission_handler: ^12.0.1
+
+  # Format-preserving media engines
+  ffmpeg_kit_flutter_new: ^4.6.2
+  path_provider: ^2.1.5
+
+  # Theming
+  # Dynamic (wallpaper) color is read directly from the Android system palette
+  # via a platform channel — see lib/core/platform/system_palette.dart. The
+  # dynamic_color package was dropped: 1.9.x fails to compile against this
+  # Kotlin/AGP toolchain and 2.x requires Dart >= 3.12.
+  shared_preferences: ^2.3.3
+
+  # Motion
+  lottie: ^3.3.1
+
+  # Platform info
+  package_info_plus: ^9.0.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  build_runner: ^2.4.15
+  drift_dev: ^2.28.1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/lottie/success.json
+    - assets/lottie/logo-animated.json
+    - assets/logo/android/playstore-icon.png

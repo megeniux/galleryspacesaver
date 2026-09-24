@@ -28,6 +28,14 @@ class AppTheme {
   static Color glowColor(BuildContext context) =>
       Theme.of(context).colorScheme.secondary;
 
+  /// Keeps icons readable when the brand primary becomes a dark surface.
+  static Color iconAccent(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.brightness == Brightness.dark
+        ? theme.colorScheme.secondary
+        : theme.colorScheme.primary;
+  }
+
   static ThemeData _build(Brightness brightness) {
     final dark = brightness == Brightness.dark;
     final scheme = dark
@@ -40,6 +48,8 @@ class AppTheme {
             onSecondary: AppColors.space,
             secondaryContainer: Color(0xFF4A3917),
             onSecondaryContainer: Color(0xFFFFE8A8),
+            errorContainer: Color(0xFF5F1D28),
+            onErrorContainer: Color(0xFFFFDAD6),
             surface: AppColors.space,
             onSurface: Color(0xFFEAF5FF),
             surfaceContainerLowest: Color(0xFF040B13),
@@ -62,6 +72,8 @@ class AppTheme {
             onSecondary: AppColors.space,
             secondaryContainer: Color(0xFFFFF2CD),
             onSecondaryContainer: Color(0xFF4B3500),
+            errorContainer: Color(0xFFFFDAD6),
+            onErrorContainer: Color(0xFF410002),
             surface: AppColors.lightSurface,
             onSurface: AppColors.lightText,
             surfaceContainerLowest: Colors.white,
@@ -166,7 +178,7 @@ class AppTheme {
       chipTheme: ChipThemeData(
         side: BorderSide(color: scheme.outlineVariant),
         selectedColor: dark ? AppColors.gold : AppColors.navy,
-        checkmarkColor: dark ? AppColors.space : Colors.white,
+        checkmarkColor: Colors.white,
         labelStyle: TextStyle(
           fontWeight: FontWeight.w700,
           color: scheme.onSurface,
@@ -236,10 +248,11 @@ class AppTheme {
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
-        backgroundColor: dark ? AppColors.spacePanel : AppColors.navy,
+        backgroundColor: dark ? scheme.surfaceContainerHigh : scheme.primary,
         contentTextStyle: TextStyle(
-          color: dark ? AppColors.space : Colors.white,
+          color: dark ? scheme.onSurface : scheme.onPrimary,
         ),
+        actionTextColor: scheme.secondary,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       ),
       dividerTheme: DividerThemeData(

@@ -132,7 +132,7 @@ class _Preview extends StatelessWidget {
             child: Icon(
               _mediaIcon(job.mediaType),
               size: 64,
-              color: scheme.primary,
+              color: AppTheme.iconAccent(context),
             ),
           ),
         );

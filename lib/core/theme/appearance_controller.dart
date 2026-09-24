@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// User-controlled appearance settings.
 @immutable
 class AppearanceState {
-  // Dark is the brand-first default; users can still choose light or system.
-  const AppearanceState({this.themeMode = ThemeMode.dark});
+  // First launch stays light regardless of the device's system appearance.
+  const AppearanceState({this.themeMode = ThemeMode.light});
 
   final ThemeMode themeMode;
 

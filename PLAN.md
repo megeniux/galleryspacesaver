@@ -139,7 +139,7 @@ than "zero data collected", so the Play data-safety form remains honest.
 ## 3. Phase Roadmap
 
 ### Phase 0 — Foundation
-**Status:** 🟡 In progress — code complete; external Firebase/Lottie setup remains blocked
+**Status:** 🟡 In progress — code complete; Firebase project setup remains blocked
 
 - [x] Scaffold Flutter project `rigel_space_saver`, app id `com.techrigel.rigelspacesaver`
 - [x] Android config: minSdk 26, Java/Kotlin 17, R8 + ProGuard rules for release
@@ -148,11 +148,11 @@ than "zero data collected", so the Play data-safety form remains honest.
 - [x] Fixed Rigel brand theme (light/dark/system)
 - [x] Launcher icons wired in (adaptive icon, navy `#153462` background)
 - [x] Settings screen: theme mode with fixed Rigel brand palette
-- [x] Formatting utilities + unit tests (8 passing)
+- [x] Formatting utilities
 - [x] `flutter analyze` clean
 - [x] Debug APK builds successfully
 - [ ] Firebase (core, messaging, in-app messaging, analytics, crashlytics) — **blocked**, needs `google-services.json`
-- [ ] Lottie splash screen — **blocked**, needs animation assets
+- [x] Lottie splash screen using the supplied animated logo asset
 - [ ] Release signing keystore — deferred to Phase 7
 
 **Decisions made during this phase**
@@ -226,7 +226,6 @@ than "zero data collected", so the Play data-safety form remains honest.
 - [x] Verification gate: exists, decodes/plays, smaller, dimensions/duration match
 - [x] Skip-with-reason for non-shrinkable files
 - [x] Progress reporting per job (FFmpeg statistics callback + synthetic progress for images)
-- [x] Unit tests for the strategy router and verification gate
 
 **Decisions made during this phase**
 
@@ -301,6 +300,9 @@ than "zero data collected", so the Play data-safety form remains honest.
 - [x] Skip & failure report with plain-language reasons
 - [x] Onboarding explaining offline / privacy / overnight batching
 - [x] Settings: theme mode, default preset, notifications, privacy statement, cache & bin management
+- [x] Library file-info bottom sheet with metadata, truthful folder location and estimated savings
+- [x] Open original media through Android's associated-app chooser from the Library
+- [x] Home large-file shortcuts open Files filtered to items over 50 MB, largest first
 - [ ] Firebase In-App Messaging placements
 - [x] Empty, error, loading and accessibility states; localization scaffold
 
@@ -354,6 +356,8 @@ make the app feel premium rather than utilitarian — they are not optional.
 
 | Date | Phase | Notes |
 |---|---|---|
+| 2026-09-24 | Maintenance | At user request, removed all six `test/` unit-test files and six ignored test/build logs. `flutter test` coverage is no longer present; historical test counts below reflect the original runs. |
+| 2026-09-24 | Phase 6 | Added Library file info and Android Open with actions plus Home large-file shortcuts (>50 MB); verified the info sheet, chooser and filter on Pixel 7. `flutter analyze` clean, 22 tests pass, and debug `flutter run` is active. |
 | 2026-09-23 | Phase 6 | Reworked the visual system around the supplied planet logo: deep-space and light themes, neon action states, animated splash/dashboard, balanced storage ring, responsive selection bar, and unified futuristic surfaces. Live-checked Home, Files, Compression Options, Queue, History, Settings, and drawer on Pixel 7. |
 | 2026-09-23 | Phase 6 | Applied final `Design.md` control alignment: navy `#153462` now drives primary actions, radios, checkboxes, switches, chips and sliders; library selection uses checkboxes and compression presets use radio cards. `flutter analyze`, 18 tests, debug APK build and Pixel 7 debug run pass. Firebase remains blocked by missing app configuration. |
 | 2026-09-22 | — | Plan created and approved. |

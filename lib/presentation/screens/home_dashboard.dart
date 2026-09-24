@@ -37,6 +37,11 @@ class HomeDashboard extends ConsumerWidget {
         ? 0.0
         : (storage.usedBytes / storage.totalBytes).clamp(0.0, 1.0);
 
+    void openLargeFiles() {
+      ref.read(libraryLargeFilesFocusProvider.notifier).state = true;
+      onOpenFiles();
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
       children: [
@@ -109,7 +114,7 @@ class HomeDashboard extends ConsumerWidget {
           _EasySavings(
             items: items,
             settings: compressionSettings,
-            onOpenFiles: onOpenFiles,
+            onOpenFiles: openLargeFiles,
           ),
         ],
         const SizedBox(height: 20),
@@ -128,7 +133,7 @@ class HomeDashboard extends ConsumerWidget {
             ref.read(libraryKindFocusProvider.notifier).state = kind;
             onOpenFiles();
           },
-          onOpenFiles: onOpenFiles,
+          onOpenFiles: openLargeFiles,
         ),
       ],
     );
@@ -225,7 +230,7 @@ class _EasySavings extends StatelessWidget {
             child: TextButton.icon(
               onPressed: onOpenFiles,
               icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-              label: const Text('Review files'),
+              label: const Text('Review large files'),
             ),
           ),
         ],
@@ -254,7 +259,11 @@ class _StorageOverviewCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              Icon(Icons.storage_rounded, color: scheme.primary, size: 18),
+              Icon(
+                Icons.storage_rounded,
+                color: AppTheme.iconAccent(context),
+                size: 18,
+              ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
@@ -317,7 +326,7 @@ class _MediaOverviewCard extends StatelessWidget {
             children: [
               Icon(
                 Icons.donut_large_rounded,
-                color: theme.colorScheme.primary,
+                color: AppTheme.iconAccent(context),
                 size: 18,
               ),
               const SizedBox(width: 6),
@@ -743,8 +752,8 @@ class _QuickTools extends StatelessWidget {
       const SizedBox(height: 10),
       _QuickToolTile(
         icon: Icons.sort_rounded,
-        title: 'Biggest files first',
-        subtitle: 'Review everything, largest to smallest',
+        title: 'Review large files',
+        subtitle: 'Show files over 50 MB, largest first',
         onPressed: onOpenFiles,
       ),
     ],

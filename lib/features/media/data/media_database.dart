@@ -21,7 +21,6 @@ class MediaItems extends Table {
   List<Set<Column<Object>>> get uniqueKeys => [
     {uri},
   ];
-
 }
 
 class CompressionJobs extends Table {
@@ -66,9 +65,13 @@ class SavingsSessions extends Table {
   IntColumn get failedCount => integer().withDefault(const Constant(0))();
 }
 
-@DriftDatabase(tables: [MediaItems, CompressionJobs, RecycleBinEntries, SavingsSessions])
+@DriftDatabase(
+  tables: [MediaItems, CompressionJobs, RecycleBinEntries, SavingsSessions],
+)
 class MediaDatabase extends _$MediaDatabase {
   MediaDatabase() : super(driftDatabase(name: 'gallery_sweeper'));
+
+  MediaDatabase.forTesting(super.executor);
 
   @override
   int get schemaVersion => 5;
@@ -78,49 +81,68 @@ class MediaDatabase extends _$MediaDatabase {
     onCreate: (Migrator m) => m.createAll(),
     onUpgrade: (Migrator m, int from, int to) async {
       if (from < 2) await m.createTable(compressionJobs);
-      if (from < 3) await m.addColumn(compressionJobs, compressionJobs.outputSize);
+      if (from < 3) {
+        await m.addColumn(compressionJobs, compressionJobs.outputSize);
+      }
       if (from < 4) await m.createTable(recycleBinEntries);
       if (from < 5) await m.createTable(savingsSessions);
     },
   );
 
   Stream<List<MediaItem>> watchAll() {
-    return (select(mediaItems)
-          ..orderBy([
-            (table) => OrderingTerm.desc(table.size),
-            (table) => OrderingTerm.asc(table.displayName),
-          ]))
+    return (select(mediaItems)..orderBy([
+          (table) => OrderingTerm.desc(table.size),
+          (table) => OrderingTerm.asc(table.displayName),
+        ]))
         .watch();
   }
 
   Future<List<MediaItem>> getAll() => select(mediaItems).get();
 
   Future<MediaItem?> getMediaItem(int id) {
-    return (select(mediaItems)..where((item) => item.id.equals(id))).getSingleOrNull();
+    return (select(
+      mediaItems,
+    )..where((item) => item.id.equals(id))).getSingleOrNull();
   }
 
   Stream<List<CompressionJob>> watchJobs() {
-    return (select(compressionJobs)..orderBy([(table) => OrderingTerm.desc(table.createdAt)])).watch();
+    return (select(
+      compressionJobs,
+    )..orderBy([(table) => OrderingTerm.desc(table.createdAt)])).watch();
   }
 
-  Future<List<CompressionJob>> getJobs() => (select(compressionJobs)..orderBy([(table) => OrderingTerm.asc(table.createdAt)])).get();
+  Future<List<CompressionJob>> getJobs() => (select(
+    compressionJobs,
+  )..orderBy([(table) => OrderingTerm.asc(table.createdAt)])).get();
 
   Future<CompressionJob?> nextQueuedJob(DateTime now) async {
     final query = select(compressionJobs)
-      ..where((job) => job.status.equals('queued') & (job.nextAttemptAt.isNull() | job.nextAttemptAt.isSmallerOrEqualValue(now)))
+      ..where(
+        (job) =>
+            job.status.equals('queued') &
+            (job.nextAttemptAt.isNull() |
+                job.nextAttemptAt.isSmallerOrEqualValue(now)),
+      )
       ..orderBy([(job) => OrderingTerm.asc(job.createdAt)])
       ..limit(1);
     return query.getSingleOrNull();
   }
 
-  Future<int> insertJob(CompressionJobsCompanion entry) => into(compressionJobs).insert(entry);
+  Future<int> insertJob(CompressionJobsCompanion entry) =>
+      into(compressionJobs).insert(entry);
+
+  Future<int> deleteAllJobs() => delete(compressionJobs).go();
 
   Future<bool> updateJob(int id, CompressionJobsCompanion entry) {
-    return (update(compressionJobs)..where((job) => job.id.equals(id))).write(entry).then((count) => count > 0);
+    return (update(compressionJobs)..where((job) => job.id.equals(id)))
+        .write(entry)
+        .then((count) => count > 0);
   }
 
   Future<void> resetActiveJobs() async {
-    await (update(compressionJobs)..where((job) => job.status.isIn(['running', 'verifying']))).write(
+    await (update(
+      compressionJobs,
+    )..where((job) => job.status.isIn(['running', 'verifying']))).write(
       CompressionJobsCompanion(
         status: const Value('queued'),
         progress: const Value(0),
@@ -130,33 +152,49 @@ class MediaDatabase extends _$MediaDatabase {
   }
 
   Stream<List<RecycleBinEntry>> watchRecycleBin() {
-    return (select(recycleBinEntries)..orderBy([(entry) => OrderingTerm.desc(entry.createdAt)])).watch();
+    return (select(
+      recycleBinEntries,
+    )..orderBy([(entry) => OrderingTerm.desc(entry.createdAt)])).watch();
   }
 
   Future<List<RecycleBinEntry>> getExpiredRecycleBin(DateTime now) {
-    return (select(recycleBinEntries)..where((entry) => entry.expiresAt.isSmallerThanValue(now))).get();
+    return (select(
+      recycleBinEntries,
+    )..where((entry) => entry.expiresAt.isSmallerThanValue(now))).get();
   }
 
-  Future<List<RecycleBinEntry>> getAllRecycleBin() => (select(recycleBinEntries)..orderBy([(entry) => OrderingTerm.asc(entry.createdAt)])).get();
+  Future<List<RecycleBinEntry>> getAllRecycleBin() => (select(
+    recycleBinEntries,
+  )..orderBy([(entry) => OrderingTerm.asc(entry.createdAt)])).get();
 
-  Future<int> insertRecycleBinEntry(RecycleBinEntriesCompanion entry) => into(recycleBinEntries).insert(entry);
+  Future<int> insertRecycleBinEntry(RecycleBinEntriesCompanion entry) =>
+      into(recycleBinEntries).insert(entry);
 
   Future<bool> deleteRecycleBinEntry(int id) {
-    return (delete(recycleBinEntries)..where((entry) => entry.id.equals(id))).go().then((count) => count > 0);
+    return (delete(
+      recycleBinEntries,
+    )..where((entry) => entry.id.equals(id))).go().then((count) => count > 0);
   }
 
   Stream<List<SavingsSession>> watchSavingsSessions() {
-    return (select(savingsSessions)..orderBy([(session) => OrderingTerm.desc(session.startedAt)])).watch();
+    return (select(
+      savingsSessions,
+    )..orderBy([(session) => OrderingTerm.desc(session.startedAt)])).watch();
   }
 
-  Future<int> insertSavingsSession(SavingsSessionsCompanion entry) => into(savingsSessions).insert(entry);
+  Future<int> insertSavingsSession(SavingsSessionsCompanion entry) =>
+      into(savingsSessions).insert(entry);
 
   Future<bool> updateSavingsSession(int id, SavingsSessionsCompanion entry) {
-    return (update(savingsSessions)..where((session) => session.id.equals(id))).write(entry).then((count) => count > 0);
+    return (update(savingsSessions)..where((session) => session.id.equals(id)))
+        .write(entry)
+        .then((count) => count > 0);
   }
 
   Future<List<CompressionJob>> getJobsUpdatedAfter(DateTime start) {
-    return (select(compressionJobs)..where((job) => job.updatedAt.isBiggerOrEqualValue(start))).get();
+    return (select(
+      compressionJobs,
+    )..where((job) => job.updatedAt.isBiggerOrEqualValue(start))).get();
   }
 
   Future<void> replaceAll(List<MediaItemsCompanion> entries) async {
@@ -169,12 +207,14 @@ class MediaDatabase extends _$MediaDatabase {
   Future<void> upsertAll(List<MediaItemsCompanion> entries) async {
     await batch((batch) {
       for (final entry in entries) {
-        batch.insert(
-          mediaItems,
-          entry,
-          mode: InsertMode.insertOrReplace,
-        );
+        batch.insert(mediaItems, entry, mode: InsertMode.insertOrReplace);
       }
     });
+  }
+
+  Future<bool> updateMediaItemByUri(String uri, MediaItemsCompanion values) {
+    return (update(mediaItems)..where((item) => item.uri.equals(uri)))
+        .write(values)
+        .then((count) => count > 0);
   }
 }

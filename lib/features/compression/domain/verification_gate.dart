@@ -21,48 +21,88 @@ class VerificationGate {
     required File output,
     required MediaFormat format,
   }) async {
-    if (!await output.exists()) return const VerificationResult(passed: false, reason: 'The encoder produced no output.');
+    if (!await output.exists()) {
+      return const VerificationResult(
+        passed: false,
+        reason: 'The encoder produced no output.',
+      );
+    }
     final outputBytes = await output.length();
-    if (outputBytes >= input.size) return const VerificationResult(passed: false, reason: 'The compressed output is not smaller.');
+    if (outputBytes >= input.size) {
+      return const VerificationResult(
+        passed: false,
+        reason: 'The compressed output is not smaller.',
+      );
+    }
     if (format.mediaType == 'image') return _verifyImage(input, output);
     return _verifyPlayable(input, output);
   }
 
-  static Future<VerificationResult> _verifyImage(MediaItem input, File output) async {
+  static Future<VerificationResult> _verifyImage(
+    MediaItem input,
+    File output,
+  ) async {
     try {
       final bytes = await output.readAsBytes();
       final codec = await ui.instantiateImageCodec(bytes);
       final frame = await codec.getNextFrame();
       final image = frame.image;
       final validDimensions = image.width > 0 && image.height > 0;
-      final inputAspect = input.width != null && input.height != null && input.height! > 0 ? input.width! / input.height! : null;
+      final inputAspect =
+          input.width != null && input.height != null && input.height! > 0
+          ? input.width! / input.height!
+          : null;
       final outputAspect = image.height > 0 ? image.width / image.height : null;
       image.dispose();
       codec.dispose();
-      final directAspectMatches = inputAspect == null || outputAspect == null || (inputAspect - outputAspect).abs() <= .03;
-      final rotatedAspectMatches = inputAspect == null || outputAspect == null || (inputAspect - (1 / outputAspect)).abs() <= .03;
+      final directAspectMatches =
+          inputAspect == null ||
+          outputAspect == null ||
+          (inputAspect - outputAspect).abs() <= .03;
+      final rotatedAspectMatches =
+          inputAspect == null ||
+          outputAspect == null ||
+          (inputAspect - (1 / outputAspect)).abs() <= .03;
       final aspectMatches = directAspectMatches || rotatedAspectMatches;
       return validDimensions && aspectMatches
           ? const VerificationResult(passed: true)
-          : const VerificationResult(passed: false, reason: 'The output image dimensions or aspect ratio changed unexpectedly.');
+          : const VerificationResult(
+              passed: false,
+              reason:
+                  'The output image dimensions or aspect ratio changed unexpectedly.',
+            );
     } catch (_) {
       // A decode failure means the file cannot safely enter the result set.
-      return const VerificationResult(passed: false, reason: 'The compressed image could not be decoded.');
+      return const VerificationResult(
+        passed: false,
+        reason: 'The compressed image could not be decoded.',
+      );
     }
   }
 
-  static Future<VerificationResult> _verifyPlayable(MediaItem input, File output) async {
+  static Future<VerificationResult> _verifyPlayable(
+    MediaItem input,
+    File output,
+  ) async {
     try {
       final session = await FFprobeKit.getMediaInformation(output.path, 10000);
       final info = session.getMediaInformation();
-      if (!ReturnCode.isSuccess(await session.getReturnCode()) || info == null) {
-        return const VerificationResult(passed: false, reason: 'The output could not be opened by the media probe.');
+      if (!ReturnCode.isSuccess(await session.getReturnCode()) ||
+          info == null) {
+        return const VerificationResult(
+          passed: false,
+          reason: 'The output could not be opened by the media probe.',
+        );
       }
       final duration = double.tryParse(info.getDuration() ?? '');
       if (input.durationMs != null && duration != null && duration > 0) {
         final expected = input.durationMs! / 1000;
-        if ((duration - expected).abs() > (expected * .03).clamp(1, double.infinity)) {
-          return const VerificationResult(passed: false, reason: 'The output duration changed unexpectedly.');
+        if ((duration - expected).abs() >
+            (expected * .03).clamp(1, double.infinity)) {
+          return const VerificationResult(
+            passed: false,
+            reason: 'The output duration changed unexpectedly.',
+          );
         }
       }
       var videoWidth = 0;
@@ -74,17 +114,30 @@ class VerificationGate {
           break;
         }
       }
-      if (input.width != null && input.height != null && input.height! > 0 && videoWidth > 0 && videoHeight > 0) {
+      if (input.width != null &&
+          input.height != null &&
+          input.height! > 0 &&
+          videoWidth > 0 &&
+          videoHeight > 0) {
         final inputAspect = input.width! / input.height!;
         final outputAspect = videoWidth / videoHeight;
-        if ((inputAspect - outputAspect).abs() > .03) {
-          return const VerificationResult(passed: false, reason: 'The output video dimensions changed unexpectedly.');
+        final directAspectMatches = (inputAspect - outputAspect).abs() <= .03;
+        final rotatedAspectMatches =
+            (inputAspect - (1 / outputAspect)).abs() <= .03;
+        if (!directAspectMatches && !rotatedAspectMatches) {
+          return const VerificationResult(
+            passed: false,
+            reason: 'The output video dimensions changed unexpectedly.',
+          );
         }
       }
       return const VerificationResult(passed: true);
     } catch (_) {
       // Probe errors are treated as failed verification, never as permission to replace.
-      return const VerificationResult(passed: false, reason: 'The output could not be verified.');
+      return const VerificationResult(
+        passed: false,
+        reason: 'The output could not be verified.',
+      );
     }
   }
 }

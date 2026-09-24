@@ -194,8 +194,10 @@ class _ResultTile extends StatelessWidget {
     final output = job.outputSize;
     final saved = output == null ? null : job.originalSize - output;
     final scheme = Theme.of(context).colorScheme;
+    final hasError = job.status == 'failed' || job.status == 'cancelled';
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
+      color: hasError ? scheme.errorContainer : null,
       child: ListTile(
         dense: true,
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
@@ -209,7 +211,10 @@ class _ResultTile extends StatelessWidget {
             color: scheme.primaryContainer,
             borderRadius: BorderRadius.circular(12),
           ),
-          child: Icon(_mediaIcon(job.mediaType), color: scheme.primary),
+          child: Icon(
+            _mediaIcon(job.mediaType),
+            color: AppTheme.iconAccent(context),
+          ),
         ),
         title: Text(
           job.displayName,
@@ -218,11 +223,18 @@ class _ResultTile extends StatelessWidget {
         ),
         subtitle: saved != null && saved > 0
             ? Text('${formatBytes(saved)} saved')
-            : Text(job.errorMessage ?? _status(job.status)),
+            : Text(
+                job.errorMessage ?? _status(job.status),
+                style: hasError
+                    ? TextStyle(color: scheme.onErrorContainer)
+                    : null,
+              ),
         trailing: Icon(
           job.status == 'done' ? Icons.check_circle : Icons.info_outline,
           color: job.status == 'done'
               ? SweeperColors.of(context).savings
+              : hasError
+              ? scheme.onErrorContainer
               : scheme.onSurfaceVariant,
         ),
       ),

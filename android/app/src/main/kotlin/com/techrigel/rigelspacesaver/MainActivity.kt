@@ -19,6 +19,7 @@ import android.net.Uri
 import android.media.ExifInterface
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -26,6 +27,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.MessageDigest
 
 class MainActivity : FlutterActivity() {
 
@@ -119,6 +121,68 @@ class MainActivity : FlutterActivity() {
                     "writeCachedFileToUri" -> {
                         writeCachedFileToUri(call.argument<String>("sourcePath"), call.argument<String>("uri"))
                         result.success(null)
+                    }
+                    "verifyMediaUriMatchesFile" -> {
+                        val sourcePath = call.argument<String>("sourcePath")
+                        val uri = call.argument<String>("uri")
+                        if (sourcePath == null || uri == null) {
+                            result.error("INVALID_ARGUMENT", "A source and URI are required.", null)
+                        } else {
+                            Thread({
+                                try {
+                                    val matches = mediaUriMatchesFile(sourcePath, uri)
+                                    runOnUiThread { result.success(matches) }
+                                } catch (error: Exception) {
+                                    runOnUiThread {
+                                        result.error("MEDIA_VERIFY_FAILED", error.message, null)
+                                    }
+                                }
+                            }, "rigel-media-verify").start()
+                        }
+                    }
+                    "mediaInfo" -> {
+                        val uri = call.argument<String>("uri")
+                        val type = call.argument<String>("type")
+                        if (uri == null || type == null) {
+                            result.error("INVALID_ARGUMENT", "A URI and media type are required.", null)
+                        } else {
+                            result.success(mediaInfo(uri, type))
+                        }
+                    }
+                    "openPreview" -> {
+                        val path = call.argument<String>("path")
+                        val mimeType = call.argument<String>("mimeType")
+                        if (path == null || mimeType == null) {
+                            result.error("INVALID_ARGUMENT", "A cached output and media type are required.", null)
+                        } else {
+                            try {
+                                openPreview(path, mimeType)
+                                result.success(null)
+                            } catch (error: android.content.ActivityNotFoundException) {
+                                result.error("NO_MEDIA_VIEWER", "No installed app can preview this media format.", null)
+                            } catch (error: Exception) {
+                                result.error("PREVIEW_FAILED", error.message ?: "The preview could not be opened.", null)
+                            }
+                        }
+                    }
+                    "openMediaPreview" -> {
+                        val uri = call.argument<String>("uri")
+                        val mediaType = call.argument<String>("mediaType")
+                        val mimeType = call.argument<String>("mimeType")
+                        if (uri == null || mediaType == null) {
+                            result.error("INVALID_ARGUMENT", "A media URI and type are required.", null)
+                        } else {
+                            try {
+                                openMediaPreview(uri, mediaType, mimeType)
+                                result.success(null)
+                            } catch (error: android.content.ActivityNotFoundException) {
+                                result.error("NO_MEDIA_VIEWER", "No installed app can open this media format.", null)
+                            } catch (error: SecurityException) {
+                                result.error("PREVIEW_PERMISSION", "Android no longer grants access to this media item. Refresh the library and try again.", null)
+                            } catch (error: Exception) {
+                                result.error("PREVIEW_FAILED", error.message ?: "The media could not be opened.", null)
+                            }
+                        }
                     }
                     "deleteMediaUri" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("INVALID_ARGUMENT", "A URI is required.", null)
@@ -566,8 +630,115 @@ class MainActivity : FlutterActivity() {
     private fun writeCachedFileToUri(sourcePath: String?, uriString: String?) {
         if (sourcePath == null || uriString == null) throw IllegalArgumentException("A source and URI are required.")
         val input = FileInputStream(File(sourcePath))
-        val output = contentResolver.openOutputStream(android.net.Uri.parse(uriString), "w")
+        // Some MediaStore providers interpret "w" as overwrite-without-truncate.
+        // "wt" ensures shorter compressed files cannot leave the old tail behind.
+        val output = contentResolver.openOutputStream(android.net.Uri.parse(uriString), "wt")
             ?: throw IllegalStateException("MediaStore did not open the destination for writing.")
         input.use { source -> output.use { destination -> source.copyTo(destination) } }
+    }
+
+    private fun mediaUriMatchesFile(sourcePath: String, uriString: String): Boolean {
+        val expected = File(sourcePath)
+        if (!expected.isFile) return false
+        val actual = contentResolver.openInputStream(android.net.Uri.parse(uriString))
+            ?: throw IllegalStateException("MediaStore could not read the replaced item back.")
+        val expectedDigest = FileInputStream(expected).use(::sha256)
+        val actualDigest = actual.use(::sha256)
+        val sizeMatches = expectedDigest.first == actualDigest.first
+        val digestMatches = MessageDigest.isEqual(expectedDigest.second, actualDigest.second)
+        val matches = sizeMatches && digestMatches
+        if (!matches) {
+            android.util.Log.w(
+                "RigelMediaVerify",
+                "Read-back mismatch: expected=${expectedDigest.first} bytes, actual=${actualDigest.first} bytes, sameDigest=$digestMatches",
+            )
+        }
+        return matches
+    }
+
+    private fun sha256(input: java.io.InputStream): Pair<Long, ByteArray> {
+        val digest = MessageDigest.getInstance("SHA-256")
+        val buffer = ByteArray(64 * 1024)
+        var byteCount = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            byteCount += count
+            digest.update(buffer, 0, count)
+        }
+        return byteCount to digest.digest()
+    }
+
+    private fun mediaInfo(uriString: String, type: String): Map<String, Any?>? {
+        val uri = android.net.Uri.parse(uriString)
+        val projection = mutableListOf(
+            MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.DISPLAY_NAME,
+            MediaStore.MediaColumns.SIZE,
+            MediaStore.MediaColumns.DATE_MODIFIED,
+            MediaStore.MediaColumns.MIME_TYPE,
+        )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            projection += MediaStore.MediaColumns.WIDTH
+            projection += MediaStore.MediaColumns.HEIGHT
+        }
+        if (type == "video") projection += MediaStore.Video.VideoColumns.DURATION
+        return contentResolver.query(uri, projection.toTypedArray(), null, null, null)
+            ?.use { cursor ->
+                if (!cursor.moveToFirst()) return@use null
+                fun string(column: String): String? {
+                    val index = cursor.getColumnIndex(column)
+                    return index.takeIf { it >= 0 && !cursor.isNull(it) }
+                        ?.let(cursor::getString)
+                }
+                fun long(column: String): Long? {
+                    val index = cursor.getColumnIndex(column)
+                    return index.takeIf { it >= 0 && !cursor.isNull(it) }
+                        ?.let(cursor::getLong)
+                }
+                mapOf(
+                    "path" to (string(MediaStore.MediaColumns.DATA) ?: uriString),
+                    "uri" to uriString,
+                    "type" to type,
+                    "size" to (long(MediaStore.MediaColumns.SIZE) ?: 0L),
+                    "dateMillis" to ((long(MediaStore.MediaColumns.DATE_MODIFIED) ?: 0L) * 1000L),
+                    "width" to long(MediaStore.MediaColumns.WIDTH)?.toInt(),
+                    "height" to long(MediaStore.MediaColumns.HEIGHT)?.toInt(),
+                    "durationMs" to long(MediaStore.Video.VideoColumns.DURATION),
+                    "mime" to string(MediaStore.MediaColumns.MIME_TYPE),
+                    "name" to (string(MediaStore.MediaColumns.DISPLAY_NAME) ?: uri.lastPathSegment.orEmpty()),
+                )
+            }
+    }
+
+    private fun openPreview(path: String, mimeType: String) {
+        val file = File(path)
+        if (!file.isFile) {
+            throw java.io.FileNotFoundException("The compressed preview is no longer available.")
+        }
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(viewIntent, "Preview with"))
+    }
+
+    private fun openMediaPreview(uriString: String, mediaType: String, suppliedMimeType: String?) {
+        val uri = Uri.parse(uriString)
+        require(uri.scheme == "content") { "The media item no longer has a valid Android content URI." }
+        val mimeType = suppliedMimeType
+            ?: contentResolver.getType(uri)
+            ?: when (mediaType) {
+                "image" -> "image/*"
+                "video" -> "video/*"
+                "audio" -> "audio/*"
+                else -> "*/*"
+            }
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(Intent.createChooser(viewIntent, "Open with"))
     }
 }

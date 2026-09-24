@@ -51,7 +51,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                   Text(
                     'RIGEL SPACE SAVER',
                     style: theme.textTheme.headlineSmall?.copyWith(
-                      color: scheme.primary,
+                      color: theme.brightness == Brightness.dark
+                          ? scheme.onSurface
+                          : scheme.primary,
                       fontWeight: FontWeight.w900,
                       letterSpacing: .8,
                     ),
@@ -95,7 +97,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                         height: 7,
                         decoration: BoxDecoration(
                           color: index == 0
-                              ? scheme.primary
+                              ? theme.brightness == Brightness.dark
+                                    ? scheme.secondary
+                                    : scheme.primary
                               : scheme.outlineVariant,
                           borderRadius: BorderRadius.circular(8),
                         ),
@@ -155,7 +159,13 @@ class _BenefitRow extends StatelessWidget {
     padding: const EdgeInsets.all(14),
     child: Row(
       children: [
-        GlowIcon(icon, size: 48),
+        GlowIcon(
+          icon,
+          size: 48,
+          color: Theme.of(context).brightness == Brightness.dark
+              ? Theme.of(context).colorScheme.secondary
+              : Theme.of(context).colorScheme.primary,
+        ),
         const SizedBox(width: 14),
         Expanded(
           child: Column(

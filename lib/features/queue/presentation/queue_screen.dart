@@ -7,16 +7,34 @@ import '../../../core/utils/formatters.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../presentation/widgets/common.dart';
 import '../../media/data/media_database.dart';
+import '../../media/media_providers.dart';
 import '../queue_controller.dart';
 import '../queue_providers.dart';
 import 'recycle_bin_screen.dart';
 import 'results_screen.dart';
 
-class QueueScreen extends ConsumerWidget {
+class QueueScreen extends ConsumerStatefulWidget {
   const QueueScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<QueueScreen> createState() => _QueueScreenState();
+}
+
+class _QueueScreenState extends ConsumerState<QueueScreen> {
+  final Set<int> _selectedJobIds = <int>{};
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ref.read(queueControllerProvider.notifier).reconcileMissingOutputs();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final jobs =
         ref.watch(queueJobsProvider).valueOrNull ?? const <CompressionJob>[];
     final queue = ref.watch(queueControllerProvider);
@@ -31,6 +49,16 @@ class QueueScreen extends ConsumerWidget {
               {'done', 'skipped', 'failed', 'cancelled'}.contains(job.status),
         )
         .length;
+    final completed = jobs
+        .where((job) => {'done', 'skipped'}.contains(job.status))
+        .length;
+    final failed = jobs.where((job) => job.status == 'failed').length;
+    final replaceable = jobs
+        .where((job) => job.status == 'done' && job.outputPath != null)
+        .toList();
+    final selectedForReplace = replaceable
+        .where((job) => _selectedJobIds.contains(job.id))
+        .toList();
     final current = jobs
         .where((job) => job.status == 'running' || job.status == 'verifying')
         .firstOrNull;
@@ -59,7 +87,9 @@ class QueueScreen extends ConsumerWidget {
       children: [
         _ProcessingPanel(
           total: jobs.length,
+          completed: completed,
           finished: finished,
+          failed: failed,
           pending: pending,
           active: active,
           current: current,
@@ -72,14 +102,14 @@ class QueueScreen extends ConsumerWidget {
           onPause: controller.pause,
           onResume: controller.resume,
           onCancel: controller.cancel,
-          onRecycleBin: () => Navigator.of(context).push(
+          onBackups: () => Navigator.of(context).push(
             MaterialPageRoute<void>(builder: (_) => const RecycleBinScreen()),
           ),
         ),
         const SizedBox(height: 18),
         Row(
           children: [
-            const Expanded(child: SectionHeader(title: 'Files')),
+            const Expanded(child: SectionHeader(title: 'Compressed files')),
             if (finished > 0)
               TextButton.icon(
                 onPressed: () => Navigator.of(context).push(
@@ -92,10 +122,74 @@ class QueueScreen extends ConsumerWidget {
               ),
           ],
         ),
+        if (queue.status == QueueRunStatus.idle && active == 0)
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: () => _confirmClearQueue(context, ref),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              label: const Text('Clear queue & outputs'),
+            ),
+          ),
+        if (replaceable.isNotEmpty)
+          Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Row(
+                children: [
+                  Checkbox(
+                    value: _selectedJobIds.length == replaceable.length,
+                    onChanged: (selected) => setState(() {
+                      _selectedJobIds
+                        ..clear()
+                        ..addAll(
+                          selected == true
+                              ? replaceable.map((job) => job.id)
+                              : const <int>[],
+                        );
+                    }),
+                  ),
+                  Expanded(
+                    child: Text(
+                      selectedForReplace.isEmpty
+                          ? 'Select files to replace'
+                          : '${selectedForReplace.length} selected',
+                    ),
+                  ),
+                  FilledButton.icon(
+                    onPressed: selectedForReplace.isEmpty
+                        ? null
+                        : () async {
+                            await _confirmReplaceSelected(
+                              context,
+                              ref,
+                              selectedForReplace,
+                            );
+                            if (mounted) {
+                              setState(_selectedJobIds.clear);
+                            }
+                          },
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text('Replace selected'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         for (final job in jobs)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
-            child: _JobTile(job: job),
+            child: _JobTile(
+              job: job,
+              canSelect: job.status == 'done' && job.outputPath != null,
+              isSelected: _selectedJobIds.contains(job.id),
+              onSelected: () => setState(() {
+                if (!_selectedJobIds.add(job.id)) {
+                  _selectedJobIds.remove(job.id);
+                }
+              }),
+            ),
           ),
       ],
     );
@@ -105,7 +199,9 @@ class QueueScreen extends ConsumerWidget {
 class _ProcessingPanel extends StatelessWidget {
   const _ProcessingPanel({
     required this.total,
+    required this.completed,
     required this.finished,
+    required this.failed,
     required this.pending,
     required this.active,
     required this.current,
@@ -118,11 +214,13 @@ class _ProcessingPanel extends StatelessWidget {
     required this.onPause,
     required this.onResume,
     required this.onCancel,
-    required this.onRecycleBin,
+    required this.onBackups,
   });
 
   final int total;
+  final int completed;
   final int finished;
+  final int failed;
   final int pending;
   final int active;
   final CompressionJob? current;
@@ -135,7 +233,7 @@ class _ProcessingPanel extends StatelessWidget {
   final VoidCallback onPause;
   final VoidCallback onResume;
   final VoidCallback onCancel;
-  final VoidCallback onRecycleBin;
+  final VoidCallback onBackups;
 
   @override
   Widget build(BuildContext context) {
@@ -147,7 +245,9 @@ class _ProcessingPanel extends StatelessWidget {
     final running = status == QueueRunStatus.running;
     final paused = status == QueueRunStatus.paused;
     final label = current == null
-        ? (paused
+        ? (failed > 0
+              ? 'Finished with errors'
+              : paused
               ? 'Paused'
               : pending > 0
               ? 'Ready to compress'
@@ -159,82 +259,94 @@ class _ProcessingPanel extends StatelessWidget {
       color: panel,
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(18),
+        padding: const EdgeInsets.all(14),
         child: Column(
           children: [
-            Align(
-              alignment: Alignment.centerRight,
-              child: IconButton(
-                onPressed: onRecycleBin,
-                tooltip: 'Recycle bin',
-                icon: Icon(
-                  Icons.restore_from_trash_outlined,
-                  color: foreground,
+            Row(
+              children: [
+                SizedBox.square(
+                  dimension: 82,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      SizedBox.square(
+                        dimension: 82,
+                        child: CircularProgressIndicator(
+                          value: progress,
+                          strokeWidth: 8,
+                          backgroundColor: foreground.withValues(alpha: .18),
+                          color: AppTheme.glowColor(context),
+                        ),
+                      ),
+                      Text(
+                        '${(progress * 100).round()}%',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: foreground,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-            ),
-            SizedBox.square(
-              dimension: 152,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  SizedBox.square(
-                    dimension: 152,
-                    child: CircularProgressIndicator(
-                      value: progress,
-                      strokeWidth: 13,
-                      backgroundColor: foreground.withValues(alpha: .18),
-                      color: AppTheme.glowColor(context),
-                    ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: Theme.of(context).textTheme.titleMedium
+                            ?.copyWith(
+                              color: foreground,
+                              fontWeight: FontWeight.w800,
+                            ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        current?.displayName ??
+                            '$completed of $total files completed',
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: foreground),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        '$finished of $total files · $pending queued · $active active',
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: foreground.withValues(alpha: .82),
+                        ),
+                      ),
+                    ],
                   ),
-                  Text(
-                    '${(progress * 100).round()}%',
-                    style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                      color: foreground,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                ],
-              ),
+                ),
+                TextButton.icon(
+                  onPressed: onBackups,
+                  style: TextButton.styleFrom(foregroundColor: foreground),
+                  icon: const Icon(Icons.backup_outlined),
+                  label: const Text('Backups'),
+                ),
+              ],
             ),
-            const SizedBox(height: 18),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: foreground,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              current?.displayName ?? '$finished of $total files completed',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(color: foreground),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '$finished of $total files · $pending queued · $active active',
-              style: TextStyle(color: foreground.withValues(alpha: .82)),
-            ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: scheme.surface,
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(14),
               ),
               child: Row(
                 children: [
                   Expanded(
                     child: _ProgressMetric(
-                      label: 'Space Saved',
+                      label: 'Space saved',
                       value: formatBytes(savings),
                     ),
                   ),
+                  Container(width: 1, height: 32, color: scheme.outlineVariant),
+                  const SizedBox(width: 12),
                   Expanded(
                     child: _ProgressMetric(
-                      label: 'Time Remaining',
+                      label: 'Time remaining',
                       value: eta ?? '—',
                     ),
                   ),
@@ -242,14 +354,14 @@ class _ProcessingPanel extends StatelessWidget {
               ),
             ),
             if (notice != null) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 8),
               Text(
                 notice!,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: foreground),
               ),
             ],
-            const SizedBox(height: 14),
+            if (pending > 0 || running || paused) const SizedBox(height: 8),
             Row(
               children: [
                 if (!running && !paused && pending > 0)
@@ -257,8 +369,8 @@ class _ProcessingPanel extends StatelessWidget {
                     child: FilledButton(
                       onPressed: onStart,
                       style: FilledButton.styleFrom(
-                        backgroundColor: scheme.surface,
-                        foregroundColor: scheme.primary,
+                        backgroundColor: scheme.primary,
+                        foregroundColor: scheme.onPrimary,
                       ),
                       child: const Text('Start'),
                     ),
@@ -268,8 +380,8 @@ class _ProcessingPanel extends StatelessWidget {
                     child: FilledButton.icon(
                       onPressed: onPause,
                       style: FilledButton.styleFrom(
-                        backgroundColor: scheme.surface,
-                        foregroundColor: scheme.primary,
+                        backgroundColor: scheme.primary,
+                        foregroundColor: scheme.onPrimary,
                       ),
                       icon: const Icon(Icons.pause),
                       label: const Text('Pause'),
@@ -280,8 +392,8 @@ class _ProcessingPanel extends StatelessWidget {
                     child: FilledButton.icon(
                       onPressed: onResume,
                       style: FilledButton.styleFrom(
-                        backgroundColor: scheme.surface,
-                        foregroundColor: scheme.primary,
+                        backgroundColor: scheme.primary,
+                        foregroundColor: scheme.onPrimary,
                       ),
                       icon: const Icon(Icons.play_arrow),
                       label: const Text('Continue'),
@@ -347,52 +459,129 @@ String? _eta(DateTime? startedAt, double progress, QueueRunStatus status) {
 }
 
 class _JobTile extends ConsumerWidget {
-  const _JobTile({required this.job});
+  const _JobTile({
+    required this.job,
+    required this.canSelect,
+    required this.isSelected,
+    required this.onSelected,
+  });
 
   final CompressionJob job;
+  final bool canSelect;
+  final bool isSelected;
+  final VoidCallback onSelected;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final status = _statusLabel(job.status);
     final progress = (job.progress as num).toDouble().clamp(0.0, 1.0);
     final scheme = Theme.of(context).colorScheme;
+    final isActive = job.status == 'running' || job.status == 'verifying';
+    final isError = job.status == 'failed' || job.status == 'cancelled';
+    final isDone = job.status == 'done';
+    final saved = job.outputSize == null
+        ? null
+        : (job.originalSize - job.outputSize!).clamp(0, job.originalSize);
+    final statusColor = isError
+        ? scheme.error
+        : isDone
+        ? SweeperColors.of(context).savings
+        : isActive
+        ? scheme.secondary
+        : scheme.onSurfaceVariant;
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(14),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (canSelect)
+                  Checkbox(
+                    value: isSelected,
+                    onChanged: (_) => onSelected(),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  ),
                 Container(
-                  width: 40,
-                  height: 40,
+                  width: 48,
+                  height: 48,
                   decoration: BoxDecoration(
                     color: scheme.primaryContainer,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(15),
                   ),
-                  child: Icon(_iconFor(job.mediaType), color: scheme.primary),
+                  child: Icon(
+                    _iconFor(job.mediaType),
+                    color: scheme.onPrimaryContainer,
+                  ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: Text(
-                    job.displayName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          job.displayName,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall
+                              ?.copyWith(fontWeight: FontWeight.w800),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          '${_mediaTypeLabel(job.mediaType)}  ·  ${formatBytes(job.originalSize)} original',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                Text(status, style: TextStyle(color: scheme.onSurfaceVariant)),
+                const SizedBox(width: 8),
+                _StatusPill(
+                  label: _statusLabel(job.status),
+                  color: statusColor,
+                ),
               ],
             ),
-            if (!{
-              'done',
-              'skipped',
-              'failed',
-              'cancelled',
-            }.contains(job.status)) ...[
-              const SizedBox(height: 8),
+            if (isDone && job.outputSize != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 10,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHigh,
+                  borderRadius: BorderRadius.circular(13),
+                ),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${formatBytes(job.originalSize)}  →  ${formatBytes(job.outputSize!)}',
+                        style: TextStyle(
+                          color: scheme.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                    if (saved != null && saved > 0)
+                      _StatusPill(
+                        label: '${formatBytes(saved)} saved',
+                        color: SweeperColors.of(context).savings,
+                      ),
+                  ],
+                ),
+              ),
+            ],
+            if (isActive) ...[
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(child: LinearProgressIndicator(value: progress)),
@@ -407,32 +596,101 @@ class _JobTile extends ConsumerWidget {
                 ],
               ),
             ],
-            const SizedBox(height: 7),
-            Text(
-              '${formatBytes(job.originalSize)} · attempt ${job.attempts}',
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
             if (job.errorMessage != null) ...[
-              const SizedBox(height: 6),
-              Text(
-                job.errorMessage!,
-                style: TextStyle(color: scheme.error),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  color: scheme.errorContainer,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      Icons.error_outline,
+                      size: 18,
+                      color: scheme.onErrorContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        job.errorMessage!,
+                        style: TextStyle(color: scheme.onErrorContainer),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
             if (job.status == 'done' && job.outputPath != null) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        await ref
+                            .read(mediaPlatformProvider)
+                            .openPreview(
+                              path: job.outputPath!,
+                              mediaType: job.mediaType,
+                            );
+                      } catch (error) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(
+                              'Preview could not be opened: $error',
+                            ),
+                          ),
+                        );
+                      }
+                    },
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 42),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    icon: const Icon(Icons.open_in_new),
+                    label: const Text('Preview'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton.icon(
+                    onPressed: () => _confirmReplace(context, ref, job),
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size(0, 42),
+                      padding: const EdgeInsets.symmetric(horizontal: 14),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                    icon: const Icon(Icons.swap_horiz),
+                    label: const Text('Replace'),
+                  ),
+                ],
+              ),
+            ],
+            if (job.status == 'done' && job.outputPath == null) ...[
+              const SizedBox(height: 10),
               Align(
                 alignment: Alignment.centerRight,
                 child: OutlinedButton.icon(
-                  onPressed: () => _confirmReplace(context, ref, job),
+                  onPressed: () => ref
+                      .read(queueControllerProvider.notifier)
+                      .requeueJob(job.id),
                   style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 38),
-                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 42),
+                    padding: const EdgeInsets.symmetric(horizontal: 14),
+                    visualDensity: VisualDensity.compact,
                   ),
-                  icon: const Icon(Icons.swap_horiz),
-                  label: const Text('Replace original'),
+                  icon: const Icon(Icons.replay),
+                  label: const Text('Compress again'),
                 ),
               ),
             ],
@@ -441,6 +699,26 @@ class _JobTile extends ConsumerWidget {
       ),
     );
   }
+}
+
+class _StatusPill extends StatelessWidget {
+  const _StatusPill({required this.label, required this.color});
+
+  final String label;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: .14),
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: Text(
+      label,
+      style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w800),
+    ),
+  );
 }
 
 Future<void> _confirmReplace(
@@ -486,6 +764,106 @@ Future<void> _confirmReplace(
   );
 }
 
+Future<void> _confirmReplaceSelected(
+  BuildContext context,
+  WidgetRef ref,
+  List<CompressionJob> jobs,
+) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: Text('Replace ${jobs.length} selected originals?'),
+      content: const Text(
+        'Each verified compressed output will be checked again before replacement. '
+        'Recycle-bin backup settings will be respected for every file.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Replace selected'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.showSnackBar(
+    SnackBar(content: Text('Replacing ${jobs.length} originals safely…')),
+  );
+  var succeeded = 0;
+  final failures = <String>[];
+  final service = ref.read(replaceOriginalServiceProvider);
+  for (final job in jobs) {
+    final result = await service.replace(
+      job: job,
+      keepInRecycleBin: _keepRecycleBin(job.settingsJson),
+    );
+    if (result.succeeded) {
+      succeeded++;
+    } else {
+      failures.add(
+        '${job.displayName}: ${result.message ?? 'Replacement failed.'}',
+      );
+    }
+  }
+  if (!context.mounted) return;
+  messenger.hideCurrentSnackBar();
+  messenger.showSnackBar(
+    SnackBar(
+      content: Text(
+        failures.isEmpty
+            ? '$succeeded selected originals replaced safely.'
+            : '$succeeded replaced, ${failures.length} failed: ${failures.first}',
+      ),
+    ),
+  );
+}
+
+Future<void> _confirmClearQueue(BuildContext context, WidgetRef ref) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Clear compression queue?'),
+      content: const Text(
+        'This removes the queue records and temporary compressed outputs so you can choose files and settings again. '
+        'Original media, recycle-bin backups, and saved history totals are not deleted.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(dialogContext, false),
+          child: const Text('Keep queue'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(dialogContext, true),
+          child: const Text('Clear queue'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+  try {
+    final removed = await ref
+        .read(queueControllerProvider.notifier)
+        .clearQueue();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Cleared $removed queue item${removed == 1 ? '' : 's'}.'),
+      ),
+    );
+  } catch (error) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Queue could not be cleared: $error')),
+    );
+  }
+}
+
 bool _keepRecycleBin(String settingsJson) {
   try {
     return (jsonDecode(settingsJson)
@@ -512,4 +890,11 @@ IconData _iconFor(String value) => switch (value) {
   'image' => Icons.image_outlined,
   'video' => Icons.movie_outlined,
   _ => Icons.music_note_outlined,
+};
+
+String _mediaTypeLabel(String value) => switch (value) {
+  'image' => 'Photo',
+  'video' => 'Video',
+  'audio' => 'Audio',
+  _ => 'Media',
 };

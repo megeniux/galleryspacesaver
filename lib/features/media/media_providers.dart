@@ -22,6 +22,10 @@ final mediaPermissionStateProvider = StateProvider<MediaPermissionStatus?>(
 /// Library consumes and clears it when it applies the filter.
 final libraryKindFocusProvider = StateProvider<MediaKind?>((ref) => null);
 
+/// Home's large-file shortcut opens Files already sorted and filtered to items
+/// above the lightweight review threshold.
+final libraryLargeFilesFocusProvider = StateProvider<bool>((ref) => false);
+
 final mediaRepositoryProvider = Provider<MediaRepository>((ref) {
   return MediaRepository(
     ref.watch(mediaDatabaseProvider),

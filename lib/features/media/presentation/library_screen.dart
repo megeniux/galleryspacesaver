@@ -21,6 +21,8 @@ enum MediaSort {
   nameDescending,
 }
 
+enum _MediaItemAction { openWith, fileInfo, compressionPreview }
+
 class LibraryScreen extends ConsumerStatefulWidget {
   const LibraryScreen({super.key});
 
@@ -97,6 +99,18 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       });
       ref.read(libraryKindFocusProvider.notifier).state = null;
     });
+    ref.listen<bool>(libraryLargeFilesFocusProvider, (_, focus) {
+      if (!focus) return;
+      setState(() {
+        _kindFilter = null;
+        _sort = MediaSort.sizeDescending;
+        _sizeThreshold = 50 * 1024 * 1024;
+        _dateRange = null;
+        _format = null;
+        _search = '';
+      });
+      ref.read(libraryLargeFilesFocusProvider.notifier).state = false;
+    });
     final items =
         ref.watch(mediaItemsProvider).valueOrNull ?? const <MediaItem>[];
     final selection = ref.watch(selectionControllerProvider);
@@ -106,6 +120,9 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
         .where((item) => selection.selectedUris.contains(item.uri))
         .toList();
     final visible = _filterAndSort(items, _kindFilter);
+    final allVisibleSelected =
+        visible.isNotEmpty &&
+        visible.every((item) => selection.selectedUris.contains(item.uri));
     return Column(
       children: [
         Padding(
@@ -154,7 +171,11 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                 runSpacing: 4,
                 children: [
                   FilterChip(
-                    avatar: const Icon(Icons.filter_list, size: 18),
+                    avatar: Icon(
+                      Icons.filter_list,
+                      size: 18,
+                      color: AppTheme.iconAccent(context),
+                    ),
                     label: Text(_filterLabel),
                     labelStyle: TextStyle(
                       color:
@@ -171,13 +192,20 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                         _format != null,
                     onSelected: (_) => _showFilters(items),
                   ),
-                  if (visible.isNotEmpty &&
-                      selection.selectedUris.length != visible.length)
+                  if (visible.isNotEmpty && !allVisibleSelected)
                     ActionChip(
                       label: const Text('Select all'),
                       onPressed: () => ref
                           .read(selectionControllerProvider.notifier)
                           .selectAll(visible.map((item) => item.uri)),
+                    ),
+                  if (selection.selectedUris.isNotEmpty)
+                    ActionChip(
+                      avatar: const Icon(Icons.clear_all, size: 18),
+                      label: const Text('Clear selection'),
+                      onPressed: () => ref
+                          .read(selectionControllerProvider.notifier)
+                          .clear(),
                     ),
                 ],
               ),
@@ -291,6 +319,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                               visible[index],
                               selection.settings,
                             ),
+                            onOpenWith: () =>
+                                _openNativePreview(visible[index]),
+                            onInfo: () => _showFileInfo(
+                              visible[index],
+                              selection.settings,
+                            ),
                           ),
                         )
                       : ListView.separated(
@@ -308,6 +342,12 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                                 .read(selectionControllerProvider.notifier)
                                 .toggle(visible[index].uri),
                             onPreview: () => _showItemPreview(
+                              visible[index],
+                              selection.settings,
+                            ),
+                            onOpenWith: () =>
+                                _openNativePreview(visible[index]),
+                            onInfo: () => _showFileInfo(
                               visible[index],
                               selection.settings,
                             ),
@@ -553,6 +593,44 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
       ),
     );
   }
+
+  Future<void> _openNativePreview(MediaItem item) async {
+    try {
+      await ref
+          .read(mediaPlatformProvider)
+          .openMediaPreview(
+            uri: item.uri,
+            mediaType: item.mediaType,
+            mimeType: item.mimeType,
+          );
+    } on PlatformException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(error.message ?? 'Could not open this media item.'),
+        ),
+      );
+    }
+  }
+
+  Future<void> _showFileInfo(MediaItem item, CompressionSettings settings) =>
+      showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        showDragHandle: true,
+        builder: (context) => _FileInfoSheet(
+          item: item,
+          settings: settings,
+          onOpenWith: () {
+            Navigator.pop(context);
+            _openNativePreview(item);
+          },
+          onCompare: () {
+            Navigator.pop(context);
+            _showItemPreview(item, settings);
+          },
+        ),
+      );
 }
 
 // ignore: unused_element
@@ -786,7 +864,10 @@ class _LimitedAccessBanner extends StatelessWidget {
                   children: [
                     FilledButton.tonalIcon(
                       onPressed: onSelectMore,
-                      icon: const Icon(Icons.add_photo_alternate_outlined, size: 18),
+                      icon: const Icon(
+                        Icons.add_photo_alternate_outlined,
+                        size: 18,
+                      ),
                       label: const Text('Select more'),
                     ),
                     TextButton(
@@ -821,12 +902,16 @@ class _MediaGridTile extends StatelessWidget {
     required this.selected,
     required this.onToggle,
     required this.onPreview,
+    required this.onOpenWith,
+    required this.onInfo,
   });
   final MediaItem item;
   final CompressionSettings settings;
   final bool selected;
   final VoidCallback onToggle;
   final VoidCallback onPreview;
+  final VoidCallback onOpenWith;
+  final VoidCallback onInfo;
 
   @override
   Widget build(BuildContext context) => Card(
@@ -880,6 +965,15 @@ class _MediaGridTile extends StatelessWidget {
                 child: Checkbox(value: true, onChanged: (_) => onToggle()),
               ),
             ),
+          Positioned(
+            top: 8,
+            left: 8,
+            child: _MediaItemMenu(
+              onOpenWith: onOpenWith,
+              onInfo: onInfo,
+              onCompare: onPreview,
+            ),
+          ),
         ],
       ),
     ),
@@ -893,53 +987,124 @@ class _MediaListTile extends StatelessWidget {
     required this.selected,
     required this.onToggle,
     required this.onPreview,
+    required this.onOpenWith,
+    required this.onInfo,
   });
   final MediaItem item;
   final CompressionSettings settings;
   final bool selected;
   final VoidCallback onToggle;
   final VoidCallback onPreview;
+  final VoidCallback onOpenWith;
+  final VoidCallback onInfo;
 
   @override
-  Widget build(BuildContext context) => Card(
-    margin: EdgeInsets.zero,
-    child: ListTile(
-      onTap: onPreview,
-      onLongPress: onToggle,
-      selected: selected,
-      leading: SizedBox(width: 56, height: 56, child: _Thumbnail(item: item)),
-      title: Text(
-        item.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            '${formatBytes(item.size)} · ${item.mimeType ?? item.mediaType}',
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: EdgeInsets.zero,
+      child: ListTile(
+        onTap: onPreview,
+        onLongPress: onToggle,
+        selected: selected,
+        selectedColor: scheme.onSurface,
+        leading: SizedBox(width: 56, height: 56, child: _Thumbnail(item: item)),
+        title: Text(
+          item.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            color: scheme.onSurface,
+            fontWeight: FontWeight.w700,
           ),
-          Text(
-            'Potential save ~${formatBytes(estimateSavings(item, settings))}',
-            style: TextStyle(
-              color: SweeperColors.of(context).savings,
-              fontWeight: FontWeight.w800,
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${formatBytes(item.size)} · ${item.mimeType ?? item.mediaType}',
+              style: TextStyle(color: scheme.onSurfaceVariant),
             ),
-          ),
-        ],
+            Text(
+              'Potential save ~${formatBytes(estimateSavings(item, settings))}',
+              style: TextStyle(
+                color: SweeperColors.of(context).savings,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ],
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _MediaItemMenu(
+              onOpenWith: onOpenWith,
+              onInfo: onInfo,
+              onCompare: onPreview,
+            ),
+            IconButton(
+              tooltip: 'Preview',
+              onPressed: onPreview,
+              icon: const Icon(Icons.visibility_outlined),
+            ),
+            Checkbox(value: selected, onChanged: (_) => onToggle()),
+          ],
+        ),
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          IconButton(
-            tooltip: 'Preview',
-            onPressed: onPreview,
-            icon: const Icon(Icons.visibility_outlined),
-          ),
-          Checkbox(value: selected, onChanged: (_) => onToggle()),
-        ],
+    );
+  }
+}
+
+class _MediaItemMenu extends StatelessWidget {
+  const _MediaItemMenu({
+    required this.onOpenWith,
+    required this.onInfo,
+    required this.onCompare,
+  });
+
+  final VoidCallback onOpenWith;
+  final VoidCallback onInfo;
+  final VoidCallback onCompare;
+
+  @override
+  Widget build(BuildContext context) => PopupMenuButton<_MediaItemAction>(
+    tooltip: 'More file actions',
+    onSelected: (action) {
+      switch (action) {
+        case _MediaItemAction.openWith:
+          return onOpenWith();
+        case _MediaItemAction.fileInfo:
+          return onInfo();
+        case _MediaItemAction.compressionPreview:
+          return onCompare();
+      }
+    },
+    itemBuilder: (context) => const [
+      PopupMenuItem(
+        value: _MediaItemAction.openWith,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.open_in_new_rounded),
+          title: Text('Open with'),
+        ),
       ),
-    ),
+      PopupMenuItem(
+        value: _MediaItemAction.fileInfo,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.info_outline_rounded),
+          title: Text('File info'),
+        ),
+      ),
+      PopupMenuItem(
+        value: _MediaItemAction.compressionPreview,
+        child: ListTile(
+          dense: true,
+          leading: Icon(Icons.compare_rounded),
+          title: Text('Compression preview'),
+        ),
+      ),
+    ],
   );
 }
 
@@ -1042,7 +1207,7 @@ class _SelectionBar extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(16, 10, 12, 10),
         child: Row(
           children: [
-            Icon(Icons.check_circle, color: scheme.primary),
+            Icon(Icons.check_circle, color: AppTheme.iconAccent(context)),
             const SizedBox(width: 8),
             Expanded(
               child: Text(
@@ -1356,7 +1521,9 @@ class _PresetOptionCard extends StatelessWidget {
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(14),
           side: BorderSide(
-            color: selected ? scheme.primary : scheme.outlineVariant,
+            color: selected
+                ? AppTheme.iconAccent(context)
+                : scheme.outlineVariant,
             width: selected ? 1.5 : 1,
           ),
         ),
@@ -1436,6 +1603,188 @@ class _SliderSetting extends StatelessWidget {
   );
 }
 
+class _FileInfoSheet extends ConsumerWidget {
+  const _FileInfoSheet({
+    required this.item,
+    required this.settings,
+    required this.onOpenWith,
+    required this.onCompare,
+  });
+
+  final MediaItem item;
+  final CompressionSettings settings;
+  final VoidCallback onOpenWith;
+  final VoidCallback onCompare;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final details = <(String, String)>[
+      ('Type', item.mimeType ?? item.mediaType.toUpperCase()),
+      ('Size', formatBytes(item.size)),
+      if (item.width != null && item.height != null)
+        ('Dimensions', '${item.width} × ${item.height}'),
+      if (item.durationMs != null)
+        ('Duration', formatDuration(Duration(milliseconds: item.durationMs!))),
+      if (item.modifiedAt != null)
+        ('Modified', _formatMediaDate(item.modifiedAt!)),
+      ('Location', _mediaFolderLocation(item.path)),
+      ('Potential saving', '~${formatBytes(estimateSavings(item, settings))}'),
+    ];
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(20, 4, 20, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                SizedBox(
+                  width: 64,
+                  height: 64,
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: _Thumbnail(item: item),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'File info',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
+                      Text(
+                        item.displayName,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: scheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Card(
+              margin: EdgeInsets.zero,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Column(
+                  children: [
+                    for (var index = 0; index < details.length; index++)
+                      _FileInfoRow(
+                        label: details[index].$1,
+                        value: details[index].$2,
+                        highlight: details[index].$1 == 'Potential saving',
+                        showDivider: index != details.length - 1,
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: onOpenWith,
+                    icon: const Icon(Icons.open_in_new_rounded),
+                    label: const Text('Open with'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: onCompare,
+                    icon: const Icon(Icons.compare_rounded),
+                    label: const Text('Preview options'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _FileInfoRow extends StatelessWidget {
+  const _FileInfoRow({
+    required this.label,
+    required this.value,
+    required this.highlight,
+    required this.showDivider,
+  });
+
+  final String label;
+  final String value;
+  final bool highlight;
+  final bool showDivider;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 11),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              SizedBox(
+                width: 112,
+                child: Text(
+                  label,
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              ),
+              Expanded(
+                child: Text(
+                  value,
+                  textAlign: TextAlign.end,
+                  style: TextStyle(
+                    color: highlight
+                        ? SweeperColors.of(context).savings
+                        : scheme.onSurface,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        if (showDivider) const Divider(height: 1),
+      ],
+    );
+  }
+}
+
+String _mediaFolderLocation(String path) {
+  final normalized = path.trim().replaceAll('\\', '/');
+  if (normalized.isEmpty || normalized.startsWith('content://')) {
+    return 'Folder unavailable from Android';
+  }
+  final separator = normalized.lastIndexOf('/');
+  if (separator <= 0) return 'Folder unavailable from Android';
+  return normalized.substring(0, separator);
+}
+
+String _formatMediaDate(DateTime value) {
+  final date =
+      '${value.day.toString().padLeft(2, '0')}/'
+      '${value.month.toString().padLeft(2, '0')}/${value.year}';
+  final time =
+      '${value.hour.toString().padLeft(2, '0')}:'
+      '${value.minute.toString().padLeft(2, '0')}';
+  return '$date · $time';
+}
+
 class _PreviewSheet extends ConsumerWidget {
   const _PreviewSheet({required this.item, required this.preview});
   final MediaItem item;
@@ -1493,7 +1842,7 @@ class _PreviewSheet extends ConsumerWidget {
                     'Preview\n${formatBytes(preview!.length)}',
                     textAlign: TextAlign.right,
                     style: TextStyle(
-                      color: scheme.primary,
+                      color: AppTheme.iconAccent(context),
                       fontWeight: FontWeight.w700,
                     ),
                   ),

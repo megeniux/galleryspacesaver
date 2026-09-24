@@ -4,7 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/settings/app_preferences.dart';
 import '../../core/settings/cache_management_service.dart';
 import '../../core/theme/appearance_controller.dart';
+import '../../core/theme/app_theme.dart';
 import '../../features/media/selection_controller.dart';
+import '../../features/queue/queue_controller.dart';
 import '../../features/queue/presentation/recycle_bin_screen.dart';
 import '../widgets/common.dart';
 
@@ -16,8 +18,6 @@ class SettingsScreen extends ConsumerWidget {
     final appearance = ref.watch(appearanceControllerProvider);
     final preferences = ref.watch(appPreferencesProvider);
     final preferencesController = ref.read(appPreferencesProvider.notifier);
-    final scheme = Theme.of(context).colorScheme;
-
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
@@ -64,7 +64,10 @@ class SettingsScreen extends ConsumerWidget {
           child: Column(
             children: [
               ListTile(
-                leading: Icon(Icons.lock_outline, color: scheme.primary),
+                leading: Icon(
+                  Icons.lock_outline,
+                  color: AppTheme.iconAccent(context),
+                ),
                 title: const Text('Everything happens on your device'),
                 subtitle: const Text(
                   'Your media never leaves the device. Compression runs offline.',
@@ -81,9 +84,9 @@ class SettingsScreen extends ConsumerWidget {
             children: [
               ListTile(
                 leading: const Icon(Icons.restore_from_trash_outlined),
-                title: const Text('Recycle bin'),
+                title: const Text('Original backups'),
                 subtitle: const Text(
-                  'Restore originals or empty retained backups',
+                  'Restore saved originals; separate from queue and cache',
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () => Navigator.of(context).push(
@@ -96,9 +99,9 @@ class SettingsScreen extends ConsumerWidget {
                 leading: const Icon(Icons.cleaning_services_outlined),
                 title: const Text('Clear compression cache'),
                 subtitle: const Text(
-                  'Remove temporary outputs and staging files',
+                  'Remove temporary outputs; queue records remain',
                 ),
-                onTap: () => _confirmClearCache(context),
+                onTap: () => _confirmClearCache(context, ref),
               ),
             ],
           ),
@@ -172,7 +175,7 @@ class SettingsScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _confirmClearCache(BuildContext context) async {
+  Future<void> _confirmClearCache(BuildContext context, WidgetRef ref) async {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -194,13 +197,17 @@ class SettingsScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
     final removed = await CacheManagementService().clearCompressionCache();
+    final requeued = await ref
+        .read(queueControllerProvider.notifier)
+        .reconcileMissingOutputs();
     if (!context.mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          removed == 0
+          removed == 0 && requeued == 0
               ? 'Compression cache is already empty.'
-              : 'Removed $removed temporary cache item${removed == 1 ? '' : 's'}.',
+              : 'Removed $removed cache item${removed == 1 ? '' : 's'}; '
+                    '$requeued job${requeued == 1 ? '' : 's'} ready to compress again.',
         ),
       ),
     );

@@ -26,6 +26,20 @@ class HomeShell extends ConsumerStatefulWidget {
 class _HomeShellState extends ConsumerState<HomeShell> {
   int _index = 0;
 
+  /// Previously visited tab indices, most recent last. Back pops from here.
+  final List<int> _tabHistory = [];
+
+  void _selectTab(int index) {
+    if (index == _index) return;
+    setState(() {
+      // Avoid duplicates: a revisited tab moves to the top of the history.
+      _tabHistory.remove(index);
+      _tabHistory.remove(_index);
+      _tabHistory.add(_index);
+      _index = index;
+    });
+  }
+
   static const _titles = [
     'Rigel Space Saver',
     'All Files',
@@ -74,11 +88,14 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return PopScope<void>(
-      // Bottom navigation changes the shell tab without creating a route. Keep
-      // Android back intuitive by returning to Home before allowing app exit.
-      canPop: _index == 0,
+      // Tabs are not routes, so back walks the visited-tab history like
+      // history.back(), falling back to Home before allowing app exit.
+      canPop: _index == 0 && _tabHistory.isEmpty,
       onPopInvokedWithResult: (didPop, result) {
-        if (!didPop && _index != 0) setState(() => _index = 0);
+        if (didPop) return;
+        setState(() {
+          _index = _tabHistory.isNotEmpty ? _tabHistory.removeLast() : 0;
+        });
       },
       child: Scaffold(
         appBar: AppBar(
@@ -120,18 +137,18 @@ class _HomeShellState extends ConsumerState<HomeShell> {
               IconButton(
                 tooltip: 'Settings',
                 icon: const Icon(Icons.settings_outlined),
-                onPressed: () => setState(() => _index = 4),
+                onPressed: () => _selectTab(4),
               ),
           ],
         ),
         drawer: _NavigationDrawer(
           selectedIndex: _index,
-          onSelected: (index) => setState(() => _index = index),
+          onSelected: _selectTab,
         ),
         body: IndexedStack(
           index: _index,
           children: [
-            HomeDashboard(onOpenFiles: () => setState(() => _index = 1)),
+            HomeDashboard(onOpenFiles: () => _selectTab(1)),
             const LibraryScreen(),
             const QueueScreen(),
             const SavingsScreen(),
@@ -142,7 +159,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           decoration: BoxDecoration(gradient: AppTheme.brandGradient(context)),
           child: NavigationBar(
             selectedIndex: _index,
-            onDestinationSelected: (value) => setState(() => _index = value),
+            onDestinationSelected: _selectTab,
             destinations: const [
               NavigationDestination(
                 icon: Icon(Icons.home_outlined),

@@ -341,12 +341,6 @@ class _LibraryScreenState extends ConsumerState<LibraryScreen> {
                             onToggle: () => ref
                                 .read(selectionControllerProvider.notifier)
                                 .toggle(visible[index].uri),
-                            onPreview: () => _showItemPreview(
-                              visible[index],
-                              selection.settings,
-                            ),
-                            onOpenWith: () =>
-                                _openNativePreview(visible[index]),
                             onInfo: () => _showFileInfo(
                               visible[index],
                               selection.settings,
@@ -986,16 +980,12 @@ class _MediaListTile extends StatelessWidget {
     required this.settings,
     required this.selected,
     required this.onToggle,
-    required this.onPreview,
-    required this.onOpenWith,
     required this.onInfo,
   });
   final MediaItem item;
   final CompressionSettings settings;
   final bool selected;
   final VoidCallback onToggle;
-  final VoidCallback onPreview;
-  final VoidCallback onOpenWith;
   final VoidCallback onInfo;
 
   @override
@@ -1004,7 +994,7 @@ class _MediaListTile extends StatelessWidget {
     return Card(
       margin: EdgeInsets.zero,
       child: ListTile(
-        onTap: onPreview,
+        onTap: onInfo,
         onLongPress: onToggle,
         selected: selected,
         selectedColor: scheme.onSurface,
@@ -1034,22 +1024,7 @@ class _MediaListTile extends StatelessWidget {
             ),
           ],
         ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _MediaItemMenu(
-              onOpenWith: onOpenWith,
-              onInfo: onInfo,
-              onCompare: onPreview,
-            ),
-            IconButton(
-              tooltip: 'Preview',
-              onPressed: onPreview,
-              icon: const Icon(Icons.visibility_outlined),
-            ),
-            Checkbox(value: selected, onChanged: (_) => onToggle()),
-          ],
-        ),
+        trailing: Checkbox(value: selected, onChanged: (_) => onToggle()),
       ),
     );
   }
